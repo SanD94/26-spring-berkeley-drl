@@ -37,7 +37,6 @@ class BasePolicy(nn.Module, metaclass=abc.ABCMeta):
 class MSEPolicy(BasePolicy):
     """Predicts action chunks with an MSE loss."""
 
-    ### TODO: IMPLEMENT MSEPolicy HERE ###
     def __init__(
         self,
         state_dim: int,
@@ -46,13 +45,21 @@ class MSEPolicy(BasePolicy):
         hidden_dims: tuple[int, ...] = (128, 128),
     ) -> None:
         super().__init__(state_dim, action_dim, chunk_size)
+        layers: list[nn.Module] = []
+        input_dim = state_dim
+        for hidden_dim in hidden_dims:
+            layers.extend([nn.Linear(input_dim, hidden_dim), nn.ReLU()])
+            input_dim = hidden_dim
+        layers.append(nn.Linear(input_dim, chunk_size * action_dim))
+        self.network = nn.Sequential(*layers)
 
     def compute_loss(
         self,
         state: torch.Tensor,
         action_chunk: torch.Tensor,
     ) -> torch.Tensor:
-        raise NotImplementedError
+        predicted_chunk = self.sample_actions(state)
+        return (predicted_chunk - action_chunk).square().sum(dim=(1, 2)).mean()
 
     def sample_actions(
         self,
@@ -60,7 +67,9 @@ class MSEPolicy(BasePolicy):
         *,
         num_steps: int = 10,
     ) -> torch.Tensor:
-        raise NotImplementedError
+        return self.network(state).reshape(
+            state.shape[0], self.chunk_size, self.action_dim
+        )
 
 
 class FlowMatchingPolicy(BasePolicy):

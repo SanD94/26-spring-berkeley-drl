@@ -20,7 +20,7 @@ from hw1_imitation.data import (
     load_pusht_zarr,
 )
 from hw1_imitation.model import build_policy, PolicyType
-from hw1_imitation.evaluation import Logger
+from hw1_imitation.evaluation import Logger, evaluate_policy
 
 LOGDIR_PREFIX = "exp"
 
@@ -117,6 +117,7 @@ def run_training(config: TrainConfig) -> None:
         chunk_size=config.chunk_size,
         hidden_dims=config.hidden_dims,
     ).to(device)
+    compute_loss = torch.compile(model.compute_loss, mode="reduce-overhead")
 
     exp_name = f"seed_{config.seed}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     if config.exp_name is not None:
@@ -127,7 +128,47 @@ def run_training(config: TrainConfig) -> None:
     )
     logger = Logger(log_dir)
 
-    ### TODO: PUT YOUR MAIN TRAINING LOOP HERE ###
+    optimizer = torch.optim.Adam(
+        model.parameters(), lr=config.lr, weight_decay=config.weight_decay
+    )
+    # The logger fixes its CSV columns on the first row. Reserve both metrics;
+    # NaN denotes that neither has been measured at step zero.
+    logger.log({"train/loss": float("nan"), "eval/mean_reward": float("nan")}, step=0)
+    step = 0
+    total_steps = config.num_epochs * len(loader)
+    loss_sum = 0.0
+    loss_count = 0
+    model.train()
+    for _ in range(config.num_epochs):
+        for state, action_chunk in loader:
+            state = state.to(device)
+            action_chunk = action_chunk.to(device)
+            optimizer.zero_grad()
+            loss = compute_loss(state, action_chunk)
+            loss.backward()
+            optimizer.step()
+            step += 1
+            loss_sum += loss.detach().item()
+            loss_count += 1
+
+            if step % config.log_interval == 0 or step == total_steps:
+                logger.log({"train/loss": loss_sum / loss_count}, step=step)
+                loss_sum = 0.0
+                loss_count = 0
+
+            if step % config.eval_interval == 0 or step == total_steps:
+                evaluate_policy(
+                    model=model,
+                    normalizer=normalizer,
+                    device=device,
+                    chunk_size=config.chunk_size,
+                    video_size=config.video_size,
+                    num_video_episodes=config.num_video_episodes,
+                    flow_num_steps=config.flow_num_steps,
+                    step=step,
+                    logger=logger,
+                )
+                model.train()
 
     logger.dump_for_grading()
 
