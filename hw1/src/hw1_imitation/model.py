@@ -75,7 +75,6 @@ class MSEPolicy(BasePolicy):
 class FlowMatchingPolicy(BasePolicy):
     """Predicts action chunks with a flow matching loss."""
 
-    ### TODO: IMPLEMENT FlowMatchingPolicy HERE ###
     def __init__(
         self,
         state_dim: int,
@@ -84,13 +83,30 @@ class FlowMatchingPolicy(BasePolicy):
         hidden_dims: tuple[int, ...] = (128, 128),
     ) -> None:
         super().__init__(state_dim, action_dim, chunk_size)
+        layers: list[nn.Module] = []
+        input_dim = state_dim + chunk_size * action_dim + 1
+        for hidden_dim in hidden_dims:
+            layers.extend([nn.Linear(input_dim, hidden_dim), nn.ReLU()])
+            input_dim = hidden_dim
+        layers.append(nn.Linear(input_dim, chunk_size * action_dim))
+        self.network = nn.Sequential(*layers)
 
     def compute_loss(
         self,
         state: torch.Tensor,
         action_chunk: torch.Tensor,
     ) -> torch.Tensor:
-        raise NotImplementedError
+        noise = torch.randn_like(action_chunk)
+        tau = torch.rand(
+            (state.shape[0], 1, 1), device=action_chunk.device, dtype=action_chunk.dtype
+        )
+        interpolated_chunk = tau * action_chunk + (1 - tau) * noise
+        inputs = torch.cat(
+            (state, interpolated_chunk.flatten(1), tau.flatten(1)), dim=1
+        )
+        velocity = self.network(inputs).reshape_as(action_chunk)
+        target_velocity = action_chunk - noise
+        return (velocity - target_velocity).square().sum(dim=(1, 2)).mean()
 
     def sample_actions(
         self,
@@ -98,7 +114,19 @@ class FlowMatchingPolicy(BasePolicy):
         *,
         num_steps: int = 10,
     ) -> torch.Tensor:
-        raise NotImplementedError
+        if num_steps <= 0:
+            raise ValueError("num_steps must be positive")
+        action_chunk = torch.randn(
+            (state.shape[0], self.chunk_size, self.action_dim),
+            device=state.device,
+            dtype=state.dtype,
+        )
+        for step in range(num_steps):
+            tau = state.new_full((state.shape[0], 1), step / num_steps)
+            inputs = torch.cat((state, action_chunk.flatten(1), tau), dim=1)
+            velocity = self.network(inputs).reshape_as(action_chunk)
+            action_chunk = action_chunk + velocity / num_steps
+        return action_chunk
 
 
 PolicyType: TypeAlias = Literal["mse", "flow"]
