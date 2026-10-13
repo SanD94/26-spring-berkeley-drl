@@ -28,8 +28,14 @@ However, you may still use Modal if you wish.
 
 Implemented full-trajectory discounted returns, discounted reward-to-go, optional
 batch-wide advantage normalization, categorical/Gaussian policies, rollout
-collection, and the policy-gradient update. Neural baselines and GAE are left for
-Sections 4 and 5.
+collection, and the policy-gradient update. The neural baseline is implemented
+in Section 4 below; GAE remains for Section 5.
+
+The policy loss sums over timesteps and divides by the number of trajectories,
+matching the PDF's Equations (8), (11), and (14). Advantage normalization still
+uses all transitions in the batch, and the critic loss is still mean-squared
+error per transition. Runs collected before this change used the earlier
+transition-mean policy loss; their logged actor losses use a different scale.
 
 Run the algorithm checks with:
 
@@ -60,6 +66,32 @@ return metrics use `Train_EnvstepsSoFar` as their default x-axis. In W&B, compar
 the four `cartpole_lb` runs. Use environment steps rather than iteration number.
 After each run finishes, its logs, flags, and checkpoint are saved under
 `exp/CartPole-v0_<exp_name>_sd1_<timestamp>/`.
+
+## Section 4: Neural network baseline
+
+The value critic predicts one scalar per observation and is trained against the
+Monte Carlo Q-values with mean-squared error. Policy advantages use the critic's
+predictions before it is updated, without backpropagating through the critic.
+Each policy update is followed by `baseline_gradient_steps` critic updates;
+`Baseline Loss` logs the loss of the last critic step. GAE remains for Section 5.
+
+The Chapter 4 experiments use the assignment's settings, seed 1, two 64-unit
+hidden layers, CPU execution, and no advantage normalization or video logging:
+
+```bash
+uv run src/scripts/run.py --env_name HalfCheetah-v4 -n 100 -b 5000 -eb 3000 -rtg --discount 0.95 -lr 0.01 --no_gpu --exp_name cheetah
+uv run src/scripts/run.py --env_name HalfCheetah-v4 -n 100 -b 5000 -eb 3000 -rtg --discount 0.95 -lr 0.01 --use_baseline -blr 0.01 -bgs 5 --no_gpu --exp_name cheetah_baseline
+uv run src/scripts/run.py --env_name HalfCheetah-v4 -n 100 -b 5000 -eb 3000 -rtg --discount 0.95 -lr 0.01 --use_baseline -blr 0.01 -bgs 1 --no_gpu --exp_name cheetah_baseline_bgs1
+```
+
+The third run isolates reduced baseline training by changing only the number of
+critic steps from 5 to 1. Compare `Baseline Loss` and `Eval_AverageReturn` in W&B
+against `Train_EnvstepsSoFar`. Logs and checkpoints are saved under
+`exp/HalfCheetah-v4_<exp_name>_sd1_<timestamp>/`.
+
+The five earlier HalfCheetah experiments were deleted and the three commands
+above restarted using trajectory-averaged policy loss. The training harness
+seeds the environment as well as NumPy and PyTorch.
 
 ## Troubleshooting
 

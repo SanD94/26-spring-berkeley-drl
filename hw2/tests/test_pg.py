@@ -5,6 +5,7 @@ import torch
 
 from agents.pg_agent import PGAgent
 from infrastructure import pytorch_util as ptu
+from networks.critics import ValueCritic
 from networks.policies import MLPPolicyPG
 
 
@@ -46,12 +47,64 @@ class PolicyGradientTest(unittest.TestCase):
                         flat_actions = torch.tensor(np.concatenate(actions))
                         with torch.no_grad():
                             before = agent.actor(flat_obs).log_prob(flat_actions).numpy()
-                        expected_loss = -np.dot(before, advantages) / 5
+                        # Two trajectories of unequal lengths: sum each, then average.
+                        expected_loss = -(
+                            np.dot(before[:3], advantages[:3])
+                            + np.dot(before[3:], advantages[3:])
+                        ) / 2
                         info = agent.update(obs, actions, rewards, terminals)
                         self.assertAlmostEqual(info["Actor Loss"], expected_loss, places=5)
                         with torch.no_grad():
                             after = agent.actor(flat_obs).log_prob(flat_actions).numpy()
                         self.assertGreater(np.dot(after - before, advantages), 0)
+
+    def test_baseline_update_uses_pre_update_values_and_multiple_gradient_steps(self):
+        obs = [
+            np.array([[1, -2], [0, 3]], dtype=np.float32),
+            np.array([[-4, 1]], dtype=np.float32),
+        ]
+        actions = [np.array([0, 1]), np.array([1])]
+        rewards = [np.array([2, -1]), np.array([4])]
+        terminals = [np.array([0, 1]), np.array([1])]
+        targets = np.array([1.5, -1, 4], dtype=np.float32)
+        flat_obs = np.concatenate(obs)
+        tensor_obs = ptu.from_numpy(flat_obs)
+        for steps in (1, 5):
+            for normalize in (False, True):
+                with self.subTest(steps=steps, normalize=normalize):
+                    agent = PGAgent(
+                        ob_dim=2, ac_dim=2, discrete=True, n_layers=1,
+                        layer_size=8, gamma=0.5, learning_rate=0.005,
+                        use_baseline=True, use_reward_to_go=True,
+                        baseline_learning_rate=0.01, baseline_gradient_steps=steps,
+                        gae_lambda=None, normalize_advantages=normalize,
+                    )
+                    reference = ValueCritic(2, 1, 8, 0.01)
+                    reference.load_state_dict(agent.critic.state_dict())
+                    with torch.no_grad():
+                        before_values = agent.critic(tensor_obs).numpy()
+                        log_probs = agent.actor(tensor_obs).log_prob(
+                            torch.tensor(np.concatenate(actions))
+                        ).numpy()
+                    advantages = targets - before_values
+                    if normalize:
+                        advantages = (advantages - advantages.mean()) / (
+                            advantages.std() + 1e-8
+                        )
+                    expected_actor_loss = -np.dot(log_probs, advantages) / 2
+                    for _ in range(steps):
+                        expected_mse = np.mean((reference(tensor_obs).detach().numpy() - targets) ** 2)
+                        reference_info = reference.update(flat_obs, targets)
+                        self.assertAlmostEqual(reference_info["Baseline Loss"], expected_mse, places=5)
+                    info = agent.update(obs, actions, rewards, terminals)
+                    self.assertAlmostEqual(info["Actor Loss"], expected_actor_loss, places=5)
+                    self.assertAlmostEqual(info["Baseline Loss"], expected_mse, places=5)
+                    with torch.no_grad():
+                        after_values = agent.critic(tensor_obs).numpy()
+                        np.testing.assert_allclose(after_values, reference(tensor_obs).numpy())
+                        self.assertEqual(agent.critic(tensor_obs[:1]).shape, (1,))
+                    self.assertLess(np.mean((after_values - targets) ** 2),
+                                    np.mean((before_values - targets) ** 2))
 
     def test_continuous_policy_uses_joint_action_log_probability(self):
         policy = MLPPolicyPG(
@@ -68,8 +121,8 @@ class PolicyGradientTest(unittest.TestCase):
         log_probs = -0.5 * (
             np.log(2 * np.pi * variance) + (actions - mean) ** 2 / variance
         ).sum(axis=1)
-        expected_loss = -np.dot(log_probs, advantages) / 3
-        info = policy.update(obs, actions, advantages)
+        expected_loss = -np.dot(log_probs, advantages) / 2
+        info = policy.update(obs, actions, advantages, n_trajectories=2)
         self.assertAlmostEqual(info["Actor Loss"], expected_loss, places=5)
         with torch.no_grad():
             after = policy(ptu.from_numpy(obs)).log_prob(ptu.from_numpy(actions)).numpy()

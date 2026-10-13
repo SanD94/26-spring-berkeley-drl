@@ -90,15 +90,16 @@ class MLPPolicyPG(MLPPolicy):
         obs: np.ndarray,
         actions: np.ndarray,
         advantages: np.ndarray,
+        n_trajectories: int,
     ) -> dict:
-        """Implements the policy gradient actor update."""
+        """Sum over timesteps and average over trajectories, as in Equation (14)."""
         obs = ptu.from_numpy(obs)
         actions = ptu.from_numpy(actions)
         advantages = ptu.from_numpy(advantages)
 
         if self.discrete:
             actions = actions.long()
-        loss = -(self(obs).log_prob(actions) * advantages).mean()
+        loss = -(self(obs).log_prob(actions) * advantages).sum() / n_trajectories
 
         self.optimizer.zero_grad()
         loss.backward()
