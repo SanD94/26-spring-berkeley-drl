@@ -29,7 +29,7 @@ However, you may still use Modal if you wish.
 Implemented full-trajectory discounted returns, discounted reward-to-go, optional
 batch-wide advantage normalization, categorical/Gaussian policies, rollout
 collection, and the policy-gradient update. The neural baseline is implemented
-in Section 4 below; GAE remains for Section 5.
+in Section 4 below, and GAE in Section 5.
 
 The policy loss sums over timesteps and divides by the number of trajectories,
 matching the PDF's Equations (8), (11), and (14). Advantage normalization still
@@ -73,7 +73,7 @@ The value critic predicts one scalar per observation and is trained against the
 Monte Carlo Q-values with mean-squared error. Policy advantages use the critic's
 predictions before it is updated, without backpropagating through the critic.
 Each policy update is followed by `baseline_gradient_steps` critic updates;
-`Baseline Loss` logs the loss of the last critic step. GAE remains for Section 5.
+`Baseline Loss` logs the loss of the last critic step.
 
 The Chapter 4 experiments use the assignment's settings, seed 1, two 64-unit
 hidden layers, CPU execution, and no advantage normalization or video logging:
@@ -92,6 +92,30 @@ against `Train_EnvstepsSoFar`. Logs and checkpoints are saved under
 The five earlier HalfCheetah experiments were deleted and the three commands
 above restarted using trajectory-averaged policy loss. The training harness
 seeds the environment as well as NumPy and PyTorch.
+
+## Section 5: Generalized advantage estimation
+
+GAE uses the critic's pre-update predictions to compute TD residuals and sums
+them backward with discount `gamma * gae_lambda`. Both bootstrapping and the
+recursive advantage stop at each trajectory boundary, including the rollout
+length limit. The critic still trains against Monte Carlo reward-to-go targets.
+Lambda 0 uses one-step TD advantages; lambda 1 recovers discounted reward-to-go
+minus the baseline. Optional advantage normalization is applied after GAE.
+
+The five Chapter 5 experiments preserve all assignment hyperparameters, using
+seed 1, CPU execution, and no advantage normalization or video logging:
+
+```bash
+for lambda in 0 0.95 0.98 0.99 1; do
+  uv run src/scripts/run.py --env_name LunarLander-v2 --ep_len 1000 --discount 0.99 -n 200 -b 2000 -eb 2000 -l 3 -s 128 -lr 0.001 --use_reward_to_go --use_baseline --gae_lambda "$lambda" --no_gpu --exp_name "lunar_lander_lambda$lambda"
+done
+```
+
+Each run uses the default baseline learning rate 0.005 and 5 baseline gradient
+steps. Compare all five `Eval_AverageReturn` curves against
+`Train_EnvstepsSoFar` in the `cs285_hw2` W&B project. Logs and checkpoints are
+saved under `exp/LunarLander-v2_lunar_lander_lambda<lambda>_sd1_<timestamp>/`.
+Use `OMP_NUM_THREADS=1` and `MKL_NUM_THREADS=1` when running concurrently.
 
 ## Troubleshooting
 

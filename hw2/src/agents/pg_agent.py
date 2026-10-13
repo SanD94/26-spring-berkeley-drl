@@ -148,18 +148,23 @@ class PGAgent(nn.Module):
             if self.gae_lambda is None:
                 advantages = q_values - values
             else:
-                # TODO: implement GAE
                 batch_size = obs.shape[0]
 
-                # HINT: append a dummy T+1 value for simpler recursive calculation
+                # Append a zero bootstrap value after the final trajectory.
                 values = np.append(values, [0])
-                advantages = np.zeros(batch_size + 1)
+                advantages = np.zeros(batch_size + 1, dtype=np.float32)
 
                 for i in reversed(range(batch_size)):
-                    # TODO: recursively compute advantage estimates starting from timestep T.
-                    # HINT: use terminals to handle edge cases. terminals[i] is 1 if the state is the last in its
-                    # trajectory, and 0 otherwise.
-                    pass
+                    # Stop both bootstrapping and recursion at trajectory boundaries.
+                    nonterminal = 1 - terminals[i]
+                    delta = (
+                        rewards[i] + self.gamma * nonterminal * values[i + 1]
+                        - values[i]
+                    )
+                    advantages[i] = (
+                        delta + self.gamma * self.gae_lambda * nonterminal
+                        * advantages[i + 1]
+                    )
 
                 # remove dummy advantage
                 advantages = advantages[:-1]

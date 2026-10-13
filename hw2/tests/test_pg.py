@@ -106,6 +106,44 @@ class PolicyGradientTest(unittest.TestCase):
                     self.assertLess(np.mean((after_values - targets) ** 2),
                                     np.mean((before_values - targets) ** 2))
 
+    def test_gae_update_resets_at_trajectory_boundaries(self):
+        obs = [
+            np.array([[2], [5]], dtype=np.float32),
+            np.array([[11]], dtype=np.float32),
+            np.array([[3], [7]], dtype=np.float32),
+        ]
+        actions = [np.array([0, 1]), np.array([1]), np.array([1, 0])]
+        rewards = [np.array([1, 4]), np.array([-2]), np.array([3, 8])]
+        terminals = [np.array([0, 1]), np.array([1]), np.array([0, 1])]
+        for lam in (0, 0.95, 0.98, 0.99, 1):
+            for normalize in (False, True):
+                with self.subTest(lam=lam, normalize=normalize):
+                    agent = PGAgent(
+                        ob_dim=1, ac_dim=2, discrete=True, n_layers=0,
+                        layer_size=8, gamma=0.5, learning_rate=0.005,
+                        use_baseline=True, use_reward_to_go=True,
+                        baseline_learning_rate=0.01, baseline_gradient_steps=1,
+                        gae_lambda=lam, normalize_advantages=normalize,
+                    )
+                    # V(s) = s gives TD residuals [1.5, -1, -13, 3.5, 1].
+                    with torch.no_grad():
+                        agent.critic.network[0].weight.fill_(1)
+                        agent.critic.network[0].bias.zero_()
+                        log_probs = agent.actor(
+                            ptu.from_numpy(np.concatenate(obs))
+                        ).log_prob(torch.tensor(np.concatenate(actions))).numpy()
+                    advantages = np.array(
+                        [1.5 - 0.5 * lam, -1, -13, 3.5 + 0.5 * lam, 1],
+                        dtype=np.float32,
+                    )
+                    if normalize:
+                        advantages = (advantages - advantages.mean()) / (
+                            advantages.std() + 1e-8
+                        )
+                    expected_loss = -np.dot(log_probs, advantages) / 3
+                    info = agent.update(obs, actions, rewards, terminals)
+                    self.assertAlmostEqual(info["Actor Loss"], expected_loss, places=5)
+
     def test_continuous_policy_uses_joint_action_log_probability(self):
         policy = MLPPolicyPG(
             ac_dim=2, ob_dim=2, discrete=False, n_layers=1,
